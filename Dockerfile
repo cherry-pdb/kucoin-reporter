@@ -5,7 +5,7 @@ RUN dotnet restore KuCoinFuturesReporter.csproj
 COPY . .
 RUN dotnet publish KuCoinFuturesReporter.csproj -c Release -o /app/publish --no-restore
 
-FROM mcr.microsoft.com/dotnet/runtime:8.0
+FROM mcr.microsoft.com/dotnet/aspnet:8.0
 WORKDIR /app
 COPY --from=build /app/publish .
 ENTRYPOINT ["dotnet", "KuCoinFuturesReporter.dll"]
