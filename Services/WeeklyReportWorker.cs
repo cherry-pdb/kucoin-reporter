@@ -123,11 +123,11 @@ public sealed class WeeklyReportWorker(
             sb.Append('\n');
         }
 
-        sb.Append($"overall {weekStartMonday:dd.MM}-{sundayDate:dd.MM}");
+        sb.Append($"\nOverall {weekStartMonday:dd.MM}-{sundayDate:dd.MM}");
         sb.Append(TelegramReportService.TgEmojiDirectionForSign(weekTotal));
         sb.Append(WebUtility.HtmlEncode(TelegramReportService.FormatPnlWeeklyMagnitudeRu(weekTotal)));
         sb.Append(TelegramReportService.TgEmojiMoneyMarkup());
-        sb.Append("\n\n#итого #неделя");
+        sb.Append("\n\n#overall #week");
 
         return sb.ToString();
     }
