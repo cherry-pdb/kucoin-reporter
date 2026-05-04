@@ -96,27 +96,6 @@ public sealed class TelegramReportService(IOptions<TelegramOptions> options, ILo
 
     private static string BuildPositionText(ClosedPosition p)
     {
-        var sideUpper = (p.Side ?? string.Empty).ToUpperInvariant();
-
-        string directionId;
-        string directionFallback;
-
-        if (sideUpper.Contains("LONG", StringComparison.Ordinal))
-        {
-            directionId = CustomEmojiLongArrowId;
-            directionFallback = "🔼";
-        }
-        else if (sideUpper.Contains("SHORT", StringComparison.Ordinal))
-        {
-            directionId = CustomEmojiShortArrowId;
-            directionFallback = "🔽";
-        }
-        else
-        {
-            directionId = CustomEmojiNeutralCircleId;
-            directionFallback = "⚪";
-        }
-
         var baseSymbol = StripContractSuffix((p.Symbol ?? string.Empty).Trim());
         var pnlText = FormatPnlRu(p.Pnl);
 
@@ -125,7 +104,9 @@ public sealed class TelegramReportService(IOptions<TelegramOptions> options, ILo
         var lev = FormatLeverage(p.Leverage);
         var sideLine = string.IsNullOrWhiteSpace(p.Side) ? $"Side: ? {lev}x" : $"Side: {p.Side.Trim()} {lev}x";
 
-        var arrow = TgEmoji(directionId, directionFallback);
+        var arrow = p.Pnl is { } pnlSigned
+            ? TgEmojiDirectionForSign(pnlSigned)
+            : TgEmoji(CustomEmojiNeutralCircleId, "⚪");
         var money = TgEmoji(CustomEmojiMoneyId, "💵");
 
         var sb = new StringBuilder();
