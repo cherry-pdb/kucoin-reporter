@@ -30,13 +30,37 @@ public sealed class TelegramReportService(IOptions<TelegramOptions> options, ILo
         var bot = new TelegramBotClient(_options.BotToken);
         var text = BuildPositionText(position);
 
-        await bot.SendMessage(
-            chatId: _options.ChatId,
-            text: text,
-            parseMode: ParseMode.Html,
-            cancellationToken: cancellationToken);
+        if (!string.IsNullOrWhiteSpace(_options.ForwardRelayPrivateUserId))
+        {
+            var privateRelay = _options.ForwardRelayPrivateUserId.Trim();
+            var inbox = await bot.SendMessage(
+                chatId: privateRelay,
+                text: text,
+                parseMode: ParseMode.Html,
+                disableNotification: true,
+                cancellationToken: cancellationToken);
 
-        logger.LogInformation("Sent Telegram report for {CloseId}", position.CloseId);
+            await bot.ForwardMessage(
+                chatId: _options.ChatId,
+                fromChatId: privateRelay,
+                messageId: inbox.MessageId,
+                cancellationToken: cancellationToken);
+
+            logger.LogInformation(
+                "Telegram report for {CloseId}: relay DM message {MessageId} → channel",
+                position.CloseId,
+                inbox.MessageId);
+        }
+        else
+        {
+            await bot.SendMessage(
+                chatId: _options.ChatId,
+                text: text,
+                parseMode: ParseMode.Html,
+                cancellationToken: cancellationToken);
+
+            logger.LogInformation("Sent Telegram report for {CloseId}", position.CloseId);
+        }
     }
 
     private static string BuildPositionText(ClosedPosition p)
