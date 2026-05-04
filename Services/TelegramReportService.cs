@@ -49,6 +49,7 @@ public sealed class TelegramReportService(IOptions<TelegramOptions> options, ILo
                 chatId: _options.ChatId,
                 fromChatId: privateRelay,
                 messageId: inbox.MessageId,
+                disableNotification: _options.DisableNotification,
                 cancellationToken: cancellationToken);
 
             if (logContextKey is null)
@@ -62,6 +63,7 @@ public sealed class TelegramReportService(IOptions<TelegramOptions> options, ILo
                 chatId: _options.ChatId,
                 text: html,
                 parseMode: ParseMode.Html,
+                disableNotification: _options.DisableNotification,
                 cancellationToken: cancellationToken);
 
             if (logContextKey is null)
