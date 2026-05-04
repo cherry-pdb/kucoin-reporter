@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Net;
 using System.Text;
 using KuCoinFuturesReporter.Models;
 using KuCoinFuturesReporter.Options;
@@ -15,8 +16,6 @@ public sealed class TelegramBalanceCommandsWorker(
     KuCoinSpotClient spotClient,
     ILogger<TelegramBalanceCommandsWorker> logger) : BackgroundService
 {
-    private static readonly CultureInfo En = CultureInfo.GetCultureInfo("en-US");
-
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var opts = telegramOptions.CurrentValue;
@@ -98,7 +97,11 @@ public sealed class TelegramBalanceCommandsWorker(
                         try
                         {
                             var o = await futuresClient.GetFuturesAccountOverviewAsync(stoppingToken);
-                            await bot.SendMessage(chatId, FormatFutures(o), cancellationToken: stoppingToken);
+                            await bot.SendMessage(
+                                chatId,
+                                BuildFuturesBalanceHtml(o),
+                                parseMode: ParseMode.Html,
+                                cancellationToken: stoppingToken);
                         }
                         catch (Exception ex)
                         {
@@ -113,8 +116,15 @@ public sealed class TelegramBalanceCommandsWorker(
                     {
                         try
                         {
-                            var rows = await spotClient.GetTradeAccountsAsync(stoppingToken);
-                            await bot.SendMessage(chatId, FormatSpot(rows), cancellationToken: stoppingToken);
+                            var rowsTask = spotClient.GetTradeAccountsAsync(stoppingToken);
+                            var pricesTask = spotClient.GetSpotUsdtPricesAsync(stoppingToken);
+                            await Task.WhenAll(rowsTask, pricesTask);
+                            var html = BuildSpotBalanceHtml(rowsTask.Result, pricesTask.Result);
+                            await bot.SendMessage(
+                                chatId,
+                                html,
+                                parseMode: ParseMode.Html,
+                                cancellationToken: stoppingToken);
                         }
                         catch (Exception ex)
                         {
@@ -168,36 +178,116 @@ public sealed class TelegramBalanceCommandsWorker(
         return head.Equals(command, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string FormatFutures(FuturesAccountOverview o)
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine($"Futures ({o.Currency ?? "?"})");
-        sb.AppendLine($"Equity: {Fmt(o.AccountEquity)}");
-        sb.AppendLine($"Unrealised PnL: {Fmt(o.UnrealisedPnl)}");
-        sb.AppendLine($"Margin balance: {Fmt(o.MarginBalance)}");
-        sb.AppendLine($"Position margin: {Fmt(o.PositionMargin)}");
-        sb.AppendLine($"Order margin: {Fmt(o.OrderMargin)}");
-        sb.AppendLine($"Available: {Fmt(o.AvailableBalance)}");
-        sb.AppendLine($"Available margin: {Fmt(o.AvailableMargin)}");
-        sb.Append($"Max withdraw: {Fmt(o.MaxWithdrawAmount)}");
+    private const decimal MinSpotUsdToShow = 1m;
 
-        return sb.ToString();
+    private static string BuildFuturesBalanceHtml(FuturesAccountOverview o)
+    {
+        var money = TelegramReportService.TgEmojiMoneyMarkup();
+        var sb = new StringBuilder();
+        sb.AppendLine("<b>Futures</b>");
+        sb.AppendLine();
+        AppendFuturesLine(sb, "Total", o.AccountEquity, money);
+        AppendFuturesLine(sb, "Unrealised PnL", o.UnrealisedPnl, money);
+        AppendFuturesLine(sb, "Margin balance", o.MarginBalance, money);
+        AppendFuturesLine(sb, "Position margin", o.PositionMargin, money);
+        AppendFuturesLine(sb, "Available", o.AvailableBalance, money);
+        
+        return sb.ToString().TrimEnd();
     }
 
-    private static string FormatSpot(IReadOnlyList<SpotTradeAccountLine> rows)
+    private static void AppendFuturesLine(StringBuilder sb, string label, decimal? value, string moneyMarkup)
     {
-        if (rows.Count == 0)
-            return "Spot (trade): no non-zero balances.";
+        sb.Append(WebUtility.HtmlEncode(label));
+        sb.Append(": ");
 
-        var sb = new StringBuilder();
-        sb.AppendLine("Spot (trade):");
+        if (value is null)
+        {
+            sb.AppendLine("n/a");
+            return;
+        }
+
+        sb.Append(WebUtility.HtmlEncode(FormatUsdNumber(value.Value)));
+        sb.Append(moneyMarkup);
+        sb.AppendLine();
+    }
+
+    private static string BuildSpotBalanceHtml(
+        IReadOnlyList<SpotTradeAccountLine> rows,
+        IReadOnlyDictionary<string, decimal> usdtPrices)
+    {
+        var money = TelegramReportService.TgEmojiMoneyMarkup();
+        var coins = new List<(string Currency, decimal Balance, decimal Usd)>();
 
         foreach (var r in rows)
-            sb.AppendLine(
-                $"{r.Currency}: balance {Fmt(r.Balance)}, available {Fmt(r.Available)}, holds {Fmt(r.Holds)}");
+        {
+            if (!TryGetSpotUsdPerUnit(usdtPrices, r.Currency, out var pricePerUnit))
+                continue;
+
+            var usd = r.Balance * pricePerUnit;
+
+            if (usd < MinSpotUsdToShow)
+                continue;
+
+            coins.Add((r.Currency, r.Balance, usd));
+        }
+
+        coins.Sort((a, b) => b.Usd.CompareTo(a.Usd));
+
+        if (coins.Count == 0)
+            return "<b>Spot</b>\n\nNo coins with trade balance ≥ $1.00 USDT (approx.).";
+
+        var totalUsd = coins.Sum(c => c.Usd);
+        var sb = new StringBuilder();
+        sb.AppendLine("<b>Spot</b>");
+        sb.AppendLine();
+        sb.Append("Total: ");
+        sb.Append(WebUtility.HtmlEncode(FormatUsdNumber(totalUsd)));
+        sb.Append(money);
+        sb.AppendLine();
+        sb.AppendLine("Coins:");
+
+        foreach (var c in coins)
+        {
+            sb.Append(" • ");
+            sb.Append(WebUtility.HtmlEncode(c.Currency));
+            sb.Append(": ");
+            sb.Append(WebUtility.HtmlEncode(FormatCoinAmount(c.Balance)));
+            sb.Append(" ≈ ");
+            sb.Append(WebUtility.HtmlEncode(FormatUsdNumber(c.Usd)));
+            sb.Append(money);
+            sb.AppendLine();
+        }
 
         return sb.ToString().TrimEnd();
     }
 
-    private static string Fmt(decimal? v) => v is null ? "n/a" : v.Value.ToString("0.########", En.NumberFormat);
+    private static bool TryGetSpotUsdPerUnit(IReadOnlyDictionary<string, decimal> prices, string currency, out decimal usdPerUnit)
+    {
+        usdPerUnit = 0m;
+
+        if (string.IsNullOrWhiteSpace(currency))
+            return false;
+
+        var c = currency.Trim().ToUpperInvariant();
+
+        if (c is "USDT" or "USDC" or "USDD" or "TUSD" or "USDP" or "DAI" or "BUSD" or "USDG" or "PYUSD" or "USDS")
+        {
+            usdPerUnit = 1m;
+            return true;
+        }
+
+        return prices.TryGetValue(c, out usdPerUnit) && usdPerUnit > 0m;
+    }
+
+    private static string FormatUsdNumber(decimal v) => v.ToString("0.00", CultureInfo.InvariantCulture);
+
+    private static string FormatCoinAmount(decimal amount)
+    {
+        var s = amount.ToString("0.########", CultureInfo.InvariantCulture);
+        
+        if (!s.Contains('.'))
+            return s;
+
+        return s.TrimEnd('0').TrimEnd('.');
+    }
 }

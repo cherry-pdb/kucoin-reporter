@@ -6,6 +6,41 @@ namespace KuCoinFuturesReporter.Services;
 
 public sealed class KuCoinSpotClient(HttpClient httpClient, ILogger<KuCoinSpotClient> logger)
 {
+    public async Task<IReadOnlyDictionary<string, decimal>> GetSpotUsdtPricesAsync(CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.GetAsync("/api/v1/prices", cancellationToken);
+        var json = await response.Content.ReadAsStringAsync(cancellationToken);
+
+        if (!response.IsSuccessStatusCode)
+            throw new HttpRequestException($"KuCoin spot prices failed: HTTP {(int)response.StatusCode}. Body: {json}");
+
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+
+        if (root.TryGetProperty("code", out var codeEl) && codeEl.GetString() != "200000")
+            throw new InvalidOperationException($"KuCoin prices returned code {codeEl}. Body: {json}");
+
+        if (!root.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object)
+            return new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+
+        var dict = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var prop in data.EnumerateObject())
+        {
+            if (string.IsNullOrWhiteSpace(prop.Name))
+                continue;
+
+            var raw = prop.Value.ValueKind == JsonValueKind.String
+                ? prop.Value.GetString()
+                : prop.Value.ToString();
+
+            if (decimal.TryParse(raw, NumberStyles.Any, CultureInfo.InvariantCulture, out var price))
+                dict[prop.Name] = price;
+        }
+
+        return dict;
+    }
+
     public async Task<IReadOnlyList<SpotTradeAccountLine>> GetTradeAccountsAsync(CancellationToken cancellationToken)
     {
         using var response = await httpClient.GetAsync("/api/v1/accounts?type=trade", cancellationToken);
@@ -16,7 +51,7 @@ public sealed class KuCoinSpotClient(HttpClient httpClient, ILogger<KuCoinSpotCl
 
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
-        
+
         if (root.TryGetProperty("code", out var codeEl) && codeEl.GetString() != "200000")
             throw new InvalidOperationException($"KuCoin spot returned code {codeEl}. Body: {json}");
 
