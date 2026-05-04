@@ -52,8 +52,11 @@ public sealed class WeeklyReportWorker(
             return;
 
         var weekEndExclusive = weekAnchor.AddDays(7);
+        var weekAnchorUtc = weekAnchor.ToUniversalTime();
+        var weekEndExclusiveUtc = weekEndExclusive.ToUniversalTime();
+
         var rows = await db.ClosedPositions
-            .Where(p => p.CloseTime >= weekAnchor && p.CloseTime < weekEndExclusive)
+            .Where(p => p.CloseTime >= weekAnchorUtc && p.CloseTime < weekEndExclusiveUtc)
             .Select(p => new { p.CloseTime, p.Pnl })
             .ToListAsync(stoppingToken);
         var totalsByDay = new Dictionary<DateOnly, decimal>();
@@ -79,13 +82,13 @@ public sealed class WeeklyReportWorker(
             db.SyncStates.Add(new SyncState
             {
                 Id = WeeklySyncStateId,
-                LastCloseTime = weekAnchor,
+                LastCloseTime = weekAnchorUtc,
                 UpdatedAt = DateTimeOffset.UtcNow
             });
         }
         else
         {
-            stateRow.LastCloseTime = weekAnchor;
+            stateRow.LastCloseTime = weekAnchorUtc;
             stateRow.UpdatedAt = DateTimeOffset.UtcNow;
         }
 
