@@ -1,0 +1,43 @@
+# --- .NET / Visual Studio ---
+**/bin/
+**/obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.vs/
+
+# Rider
+.idea/
+*.sln.iml
+
+# --- Logs / OS ---
+*.log
+Thumbs.db
+Desktop.ini
+
+# --- Node / Frontend ---
+**/node_modules/
+**/dist/
+**/.vite/
+**/.turbo/
+**/.cache/
+**/*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# --- Env / secrets ---
+.env
+.env.*
+!.env.example
+
+# --- Docker / local volumes (if any) ---
+/data/
+/pgdata/
+/postgres-data/
+
+# Ensure backend data access layer isn't ignored.
+!backend/Energy.Api/Data/
+

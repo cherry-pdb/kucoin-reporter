@@ -1,0 +1,15 @@
+services:
+  reporter:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: kucoin-futures-reporter:latest
+    container_name: kucoin-futures-reporter
+    restart: unless-stopped
+    env_file: .env
+    networks:
+      - infra_net
+
+networks:
+  infra_net:
+    external: true
