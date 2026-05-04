@@ -1,18 +1,16 @@
 using System.Globalization;
+using System.Net;
 using System.Text;
 using KuCoinFuturesReporter.Models;
 using KuCoinFuturesReporter.Options;
 using Microsoft.Extensions.Options;
 using Telegram.Bot;
-using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 
 namespace KuCoinFuturesReporter.Services;
 
 public sealed class TelegramReportService(IOptions<TelegramOptions> options, ILogger<TelegramReportService> logger)
 {
-    private const char CustomEmojiPlaceholder = '\u2063';
-
     private const string CustomEmojiLongArrowId = "5449683594425410231";
     private const string CustomEmojiShortArrowId = "5447183459602669338";
     private const string CustomEmojiNeutralCircleId = "5451882707875276247";
@@ -30,24 +28,38 @@ public sealed class TelegramReportService(IOptions<TelegramOptions> options, ILo
             throw new InvalidOperationException("Telegram settings are empty. Fill Telegram__BotToken and Telegram__ChatId.");
 
         var bot = new TelegramBotClient(_options.BotToken);
-        var (text, entities) = BuildPositionMessage(position);
+        var text = BuildPositionText(position);
 
         await bot.SendMessage(
             chatId: _options.ChatId,
             text: text,
-            entities: entities,
+            parseMode: ParseMode.Html,
             cancellationToken: cancellationToken);
 
         logger.LogInformation("Sent Telegram report for {CloseId}", position.CloseId);
     }
 
-    private static (string Text, IEnumerable<MessageEntity> Entities) BuildPositionMessage(ClosedPosition p)
+    private static string BuildPositionText(ClosedPosition p)
     {
         var sideUpper = (p.Side ?? string.Empty).ToUpperInvariant();
-        var directionEmojiId =
-            sideUpper.Contains("LONG", StringComparison.Ordinal) ? CustomEmojiLongArrowId
-            : sideUpper.Contains("SHORT", StringComparison.Ordinal) ? CustomEmojiShortArrowId
-            : CustomEmojiNeutralCircleId;
+
+        string directionId;
+        string directionFallback;
+        if (sideUpper.Contains("LONG", StringComparison.Ordinal))
+        {
+            directionId = CustomEmojiLongArrowId;
+            directionFallback = "🔼";
+        }
+        else if (sideUpper.Contains("SHORT", StringComparison.Ordinal))
+        {
+            directionId = CustomEmojiShortArrowId;
+            directionFallback = "🔽";
+        }
+        else
+        {
+            directionId = CustomEmojiNeutralCircleId;
+            directionFallback = "⚪";
+        }
 
         var baseSymbol = StripContractSuffix((p.Symbol ?? string.Empty).Trim());
         var pnlText = FormatPnlRu(p.Pnl);
@@ -57,39 +69,27 @@ public sealed class TelegramReportService(IOptions<TelegramOptions> options, ILo
         var lev = FormatLeverage(p.Leverage);
         var sideLine = string.IsNullOrWhiteSpace(p.Side) ? $"Side: ? {lev}x" : $"Side: {p.Side.Trim()} {lev}x";
 
-        var entities = new List<MessageEntity>();
+        var arrow = TgEmoji(directionId, directionFallback);
+        var money = TgEmoji(CustomEmojiMoneyId, "💵");
 
         var sb = new StringBuilder();
-        sb.Append(CustomEmojiPlaceholder);
+        sb.Append(arrow);
         sb.Append('$');
-        sb.Append(baseSymbol);
+        sb.Append(WebUtility.HtmlEncode(baseSymbol));
         sb.Append(' ');
-        sb.Append(pnlText);
-        sb.Append(CustomEmojiPlaceholder);
-        var moneyPlaceholderOffset = sb.Length - 1;
-
-        entities.Add(new MessageEntity
-        {
-            Type = MessageEntityType.CustomEmoji,
-            Offset = 0,
-            Length = 1,
-            CustomEmojiId = directionEmojiId
-        });
-        entities.Add(new MessageEntity
-        {
-            Type = MessageEntityType.CustomEmoji,
-            Offset = moneyPlaceholderOffset,
-            Length = 1,
-            CustomEmojiId = CustomEmojiMoneyId
-        });
-
+        sb.Append(WebUtility.HtmlEncode(pnlText));
+        sb.Append(money);
         sb.Append('\n');
-        sb.Append(sideLine);
+        sb.Append(WebUtility.HtmlEncode(sideLine));
         sb.Append('\n');
-        sb.Append($"Close: {closeLocal:dd.MM.yyyy HH:mm:ss}");
+        sb.Append("Close: ");
+        sb.Append(WebUtility.HtmlEncode(closeLocal.ToString("dd.MM.yyyy HH:mm:ss", Ru.DateTimeFormat)));
 
-        return (sb.ToString(), entities);
+        return sb.ToString();
     }
+
+    private static string TgEmoji(string emojiId, string fallbackGlyph) =>
+        $"<tg-emoji emoji-id=\"{emojiId}\">{fallbackGlyph}</tg-emoji>";
 
     private static string FormatPnlRu(decimal? pnl)
     {
