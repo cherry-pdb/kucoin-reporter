@@ -40,16 +40,17 @@ public sealed class TelegramReportService(IOptions<TelegramOptions> options, ILo
                 disableNotification: true,
                 cancellationToken: cancellationToken);
 
-            await bot.ForwardMessage(
+            var channelCopy = await bot.CopyMessage(
                 chatId: _options.ChatId,
                 fromChatId: privateRelay,
                 messageId: inbox.MessageId,
                 cancellationToken: cancellationToken);
 
             logger.LogInformation(
-                "Telegram report for {CloseId}: relay DM message {MessageId} → channel",
+                "Telegram report for {CloseId}: relay DM {DmMessageId} → channel copy {ChannelMessageId}",
                 position.CloseId,
-                inbox.MessageId);
+                inbox.MessageId,
+                channelCopy.Id);
         }
         else
         {
