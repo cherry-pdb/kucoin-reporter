@@ -4,12 +4,24 @@ using KuCoinFuturesReporter.Models;
 using KuCoinFuturesReporter.Options;
 using Microsoft.Extensions.Options;
 using Telegram.Bot;
+using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 
 namespace KuCoinFuturesReporter.Services;
 
 public sealed class TelegramReportService(IOptions<TelegramOptions> options, ILogger<TelegramReportService> logger)
 {
+    private const char CustomEmojiPlaceholder = '\u2063';
+
+    private const string CustomEmojiLongArrowId = "5449683594425410231";
+    private const string CustomEmojiShortArrowId = "5447183459602669338";
+    private const string CustomEmojiNeutralCircleId = "5451882707875276247";
+    private const string CustomEmojiMoneyId = "5409048419211682843";
+
+    private static readonly CultureInfo Ru = CultureInfo.GetCultureInfo("ru-RU");
+
+    private static readonly TimeSpan CloseDisplayOffset = TimeSpan.FromHours(3);
+
     private readonly TelegramOptions _options = options.Value;
 
     public async Task SendPositionReportAsync(ClosedPosition position, CancellationToken cancellationToken)
@@ -18,59 +30,91 @@ public sealed class TelegramReportService(IOptions<TelegramOptions> options, ILo
             throw new InvalidOperationException("Telegram settings are empty. Fill Telegram__BotToken and Telegram__ChatId.");
 
         var bot = new TelegramBotClient(_options.BotToken);
-        var text = BuildPositionText(position);
+        var (text, entities) = BuildPositionMessage(position);
 
         await bot.SendMessage(
             chatId: _options.ChatId,
             text: text,
-            parseMode: ParseMode.Html,
+            entities: entities,
             cancellationToken: cancellationToken);
 
         logger.LogInformation("Sent Telegram report for {CloseId}", position.CloseId);
     }
 
-    private static string BuildPositionText(ClosedPosition p)
+    private static (string Text, IEnumerable<MessageEntity> Entities) BuildPositionMessage(ClosedPosition p)
     {
-        var pnlEmoji = (p.Pnl ?? 0) >= 0 ? "🟢" : "🔴";
-        var duration = p.CloseTime - p.OpenTime;
-        var netPnl = p.Pnl;
-        var gross = p.RealisedGrossCost;
-        var fees = p.TradeFee;
-        var funding = p.FundingFee;
+        var sideUpper = (p.Side ?? string.Empty).ToUpperInvariant();
+        var directionEmojiId =
+            sideUpper.Contains("LONG", StringComparison.Ordinal) ? CustomEmojiLongArrowId
+            : sideUpper.Contains("SHORT", StringComparison.Ordinal) ? CustomEmojiShortArrowId
+            : CustomEmojiNeutralCircleId;
+
+        var baseSymbol = StripContractSuffix((p.Symbol ?? string.Empty).Trim());
+        var pnlText = FormatPnlRu(p.Pnl);
+
+        var closeLocal = p.CloseTime.ToOffset(CloseDisplayOffset);
+
+        var lev = FormatLeverage(p.Leverage);
+        var sideLine = string.IsNullOrWhiteSpace(p.Side) ? $"Side: ? {lev}x" : $"Side: {p.Side.Trim()} {lev}x";
+
+        var entities = new List<MessageEntity>();
 
         var sb = new StringBuilder();
-        sb.AppendLine($"{pnlEmoji} <b>{Escape(p.Symbol)} closed</b>");
-        sb.AppendLine();
-        sb.AppendLine($"Side: <b>{Escape(p.Side)}</b>");
-        sb.AppendLine($"Type: {Escape(p.Type)}");
-        sb.AppendLine($"Margin: {Escape(p.MarginMode)} | Leverage: {Fmt(p.Leverage)}x");
-        sb.AppendLine();
-        sb.AppendLine($"Entry: <code>{Fmt(p.OpenPrice)}</code>");
-        sb.AppendLine($"Exit: <code>{Fmt(p.ClosePrice)}</code>");
-        sb.AppendLine();
-        sb.AppendLine($"Net PnL: <b>{FmtMoney(netPnl)} {Escape(p.SettleCurrency)}</b>");
-        sb.AppendLine($"Gross: {FmtMoney(gross)} {Escape(p.SettleCurrency)}");
-        sb.AppendLine($"Fee: -{FmtAbs(fees)} {Escape(p.SettleCurrency)}");
-        sb.AppendLine($"Funding: {FmtMoney(funding)} {Escape(p.SettleCurrency)}");
-        sb.AppendLine();
-        sb.AppendLine($"Open: {p.OpenTime:yyyy-MM-dd HH:mm:ss} UTC");
-        sb.AppendLine($"Close: {p.CloseTime:yyyy-MM-dd HH:mm:ss} UTC");
-        sb.AppendLine($"Duration: {FormatDuration(duration)}");
-        sb.AppendLine();
-        sb.AppendLine($"ID: <code>{Escape(p.CloseId)}</code>");
-        return sb.ToString();
+        sb.Append(CustomEmojiPlaceholder);
+        sb.Append('$');
+        sb.Append(baseSymbol);
+        sb.Append(' ');
+        sb.Append(pnlText);
+        sb.Append(CustomEmojiPlaceholder);
+        var moneyPlaceholderOffset = sb.Length - 1;
+
+        entities.Add(new MessageEntity
+        {
+            Type = MessageEntityType.CustomEmoji,
+            Offset = 0,
+            Length = 1,
+            CustomEmojiId = directionEmojiId
+        });
+        entities.Add(new MessageEntity
+        {
+            Type = MessageEntityType.CustomEmoji,
+            Offset = moneyPlaceholderOffset,
+            Length = 1,
+            CustomEmojiId = CustomEmojiMoneyId
+        });
+
+        sb.Append('\n');
+        sb.Append(sideLine);
+        sb.Append('\n');
+        sb.Append($"Close: {closeLocal:dd.MM.yyyy HH:mm:ss}");
+
+        return (sb.ToString(), entities);
     }
 
-    private static string Fmt(decimal? value) => value?.ToString("0.########", CultureInfo.InvariantCulture) ?? "n/a";
-    private static string FmtMoney(decimal? value) => value?.ToString("+0.########;-0.########;0", CultureInfo.InvariantCulture) ?? "n/a";
-    private static string FmtAbs(decimal? value) => value is null ? "n/a" : Math.Abs(value.Value).ToString("0.########", CultureInfo.InvariantCulture);
-    private static string Escape(string? value) => System.Net.WebUtility.HtmlEncode(value ?? string.Empty);
-
-    private static string FormatDuration(TimeSpan duration)
+    private static string FormatPnlRu(decimal? pnl)
     {
-        if (duration.TotalSeconds < 0) return "n/a";
-        if (duration.TotalDays >= 1) return $"{(int)duration.TotalDays}d {duration.Hours}h {duration.Minutes}m";
-        if (duration.TotalHours >= 1) return $"{duration.Hours}h {duration.Minutes}m";
-        return $"{duration.Minutes}m {duration.Seconds}s";
+        if (pnl is null) return "n/a";
+        return pnl.Value.ToString("+0.00;-0.00;0", Ru.NumberFormat);
+    }
+
+    private static string FormatLeverage(decimal? leverage)
+    {
+        if (leverage is null) return "?";
+        var v = leverage.Value;
+        return v % 1m == 0 ? v.ToString("0", CultureInfo.InvariantCulture) : v.ToString("0.##", CultureInfo.InvariantCulture);
+    }
+
+    private static string StripContractSuffix(string symbol)
+    {
+        if (string.IsNullOrEmpty(symbol)) return symbol;
+        var upper = symbol.ToUpperInvariant();
+
+        foreach (var suffix in new[] { "USDTM", "USDCM", "USDM", "USDT", "USDC", "USD" })
+        {
+            if (upper.EndsWith(suffix, StringComparison.Ordinal) && upper.Length > suffix.Length)
+                return symbol[..^suffix.Length].TrimEnd();
+        }
+
+        return symbol;
     }
 }
