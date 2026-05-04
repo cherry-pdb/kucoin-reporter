@@ -24,10 +24,18 @@ builder.Services.AddHttpClient<KuCoinFuturesClient>((serviceProvider, client) =>
     client.Timeout = TimeSpan.FromSeconds(30);
 }).AddHttpMessageHandler<KuCoinAuthHandler>();
 
+builder.Services.AddHttpClient<KuCoinSpotClient>((serviceProvider, client) =>
+{
+    var o = serviceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<KuCoinOptions>>().Value;
+    client.BaseAddress = new Uri(o.SpotBaseUrl.TrimEnd('/'));
+    client.Timeout = TimeSpan.FromSeconds(30);
+}).AddHttpMessageHandler<KuCoinAuthHandler>();
+
 builder.Services.AddSingleton<TelegramReportService>();
 builder.Services.AddHostedService<KuCoinSyncWorker>();
 builder.Services.AddHostedService<WeeklyReportWorker>();
 builder.Services.AddHostedService<MonthlyReportWorker>();
 builder.Services.AddHostedService<QuarterlyReportWorker>();
+builder.Services.AddHostedService<TelegramBalanceCommandsWorker>();
 
 await builder.Build().RunAsync();

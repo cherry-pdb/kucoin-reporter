@@ -118,14 +118,14 @@ public sealed class WeeklyReportWorker(
             sb.Append(" - ");
             sb.Append($"{day:dd.MM}");
             sb.Append(TelegramReportService.TgEmojiDirectionForSign(daySum));
-            sb.Append(WebUtility.HtmlEncode(TelegramReportService.FormatPnlWeeklyMagnitudeRu(daySum)));
+            sb.Append(WebUtility.HtmlEncode(TelegramReportService.FormatPnlWeeklyMagnitude(daySum)));
             sb.Append(TelegramReportService.TgEmojiMoneyMarkup());
             sb.Append('\n');
         }
 
         sb.Append($"\nOverall {weekStartMonday:dd.MM}-{sundayDate:dd.MM}");
         sb.Append(TelegramReportService.TgEmojiDirectionForSign(weekTotal));
-        sb.Append(WebUtility.HtmlEncode(TelegramReportService.FormatPnlWeeklyMagnitudeRu(weekTotal)));
+        sb.Append(WebUtility.HtmlEncode(TelegramReportService.FormatPnlWeeklyMagnitude(weekTotal)));
         sb.Append(TelegramReportService.TgEmojiMoneyMarkup());
         sb.Append("\n\n#overall #week");
 

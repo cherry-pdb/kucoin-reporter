@@ -63,7 +63,7 @@ public sealed class MonthlyReportWorker(
         await telegram.SendHtmlReportAsync(
             html,
             stoppingToken,
-            logContextKey: $"месяц {completedMonthStart:yyyy-MM}");
+            logContextKey: $"month {completedMonthStart:yyyy-MM}");
 
         if (stateRow is null)
         {
@@ -98,10 +98,10 @@ public sealed class MonthlyReportWorker(
         sb.Append(WebUtility.HtmlEncode(title));
         sb.Append("\n\n");
         sb.Append(TelegramReportService.TgEmojiDirectionForSign(monthTotal));
-        sb.Append(WebUtility.HtmlEncode(TelegramReportService.FormatPnlWeeklyMagnitudeRu(monthTotal)));
+        sb.Append(WebUtility.HtmlEncode(TelegramReportService.FormatPnlWeeklyMagnitude(monthTotal)));
         sb.Append(TelegramReportService.TgEmojiMoneyMarkup());
         sb.Append("\n\n#overall #month");
-        
+
         return sb.ToString();
     }
 }

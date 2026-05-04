@@ -61,7 +61,7 @@ public sealed class QuarterlyReportWorker(
         await telegram.SendHtmlReportAsync(
             html,
             stoppingToken,
-            logContextKey: $"квартал Q{quarterIndex} {quarterStart:yyyy-MM}");
+            logContextKey: $"quarter Q{quarterIndex} {quarterStart:yyyy-MM}");
 
         if (stateRow is null)
         {
@@ -123,10 +123,10 @@ public sealed class QuarterlyReportWorker(
         sb.Append(WebUtility.HtmlEncode(title));
         sb.Append("\n\n");
         sb.Append(TelegramReportService.TgEmojiDirectionForSign(quarterTotal));
-        sb.Append(WebUtility.HtmlEncode(TelegramReportService.FormatPnlWeeklyMagnitudeRu(quarterTotal)));
+        sb.Append(WebUtility.HtmlEncode(TelegramReportService.FormatPnlWeeklyMagnitude(quarterTotal)));
         sb.Append(TelegramReportService.TgEmojiMoneyMarkup());
         sb.Append("\n\n#overall #quarter");
-        
+
         return sb.ToString();
     }
 }

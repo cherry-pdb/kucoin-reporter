@@ -1,12 +1,18 @@
 using System.Globalization;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using KuCoinFuturesReporter.Models;
+using Microsoft.Extensions.Options;
+using KuCoinFuturesReporter.Options;
 
 namespace KuCoinFuturesReporter.Services;
 
-public sealed class KuCoinFuturesClient(HttpClient httpClient, ILogger<KuCoinFuturesClient> logger)
+public sealed class KuCoinFuturesClient(
+    HttpClient httpClient,
+    IOptions<KuCoinOptions> kuCoinOptions,
+    ILogger<KuCoinFuturesClient> logger)
 {
+    private readonly KuCoinOptions _kuCoinOptions = kuCoinOptions.Value;
+
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         PropertyNameCaseInsensitive = true
@@ -48,6 +54,57 @@ public sealed class KuCoinFuturesClient(HttpClient httpClient, ILogger<KuCoinFut
 
         logger.LogInformation("Loaded {Count} KuCoin closed positions from {From} to {To}", result.Count, from, to);
         return result;
+    }
+
+    public async Task<FuturesAccountOverview> GetFuturesAccountOverviewAsync(CancellationToken cancellationToken)
+    {
+        var currency = string.IsNullOrWhiteSpace(_kuCoinOptions.FuturesOverviewCurrency)
+            ? "USDT"
+            : _kuCoinOptions.FuturesOverviewCurrency.Trim();
+        var q = Uri.EscapeDataString(currency);
+        using var response = await httpClient.GetAsync($"/api/v1/account-overview?currency={q}", cancellationToken);
+        var json = await response.Content.ReadAsStringAsync(cancellationToken);
+
+        if (!response.IsSuccessStatusCode)
+            throw new HttpRequestException($"KuCoin futures request failed: HTTP {(int)response.StatusCode}. Body: {json}");
+
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        
+        if (root.TryGetProperty("code", out var codeEl) && codeEl.GetString() != "200000")
+            throw new InvalidOperationException($"KuCoin futures returned code {codeEl}. Body: {json}");
+
+        if (!root.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object)
+            throw new InvalidOperationException("KuCoin futures account-overview: missing data object.");
+
+        return new FuturesAccountOverview(
+            Currency: ReadString(data, "currency"),
+            AccountEquity: ReadDecimal(data, "accountEquity"),
+            UnrealisedPnl: ReadDecimal(data, "unrealisedPNL") ?? ReadDecimal(data, "unrealisedPnl"),
+            MarginBalance: ReadDecimal(data, "marginBalance"),
+            PositionMargin: ReadDecimal(data, "positionMargin"),
+            OrderMargin: ReadDecimal(data, "orderMargin"),
+            AvailableBalance: ReadDecimal(data, "availableBalance"),
+            AvailableMargin: ReadDecimal(data, "availableMargin"),
+            MaxWithdrawAmount: ReadDecimal(data, "maxWithdrawAmount"));
+    }
+
+    private static string? ReadString(JsonElement parent, string name) =>
+        parent.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
+
+    private static decimal? ReadDecimal(JsonElement parent, string name)
+    {
+        if (!parent.TryGetProperty(name, out var p))
+            return null;
+
+        return p.ValueKind switch
+        {
+            JsonValueKind.String => decimal.TryParse(p.GetString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var d)
+                ? d
+                : null,
+            JsonValueKind.Number => p.TryGetDecimal(out var x) ? x : null,
+            _ => null
+        };
     }
 
     private static ClosedPosition Map(KuCoinClosedPositionDto x) => new()

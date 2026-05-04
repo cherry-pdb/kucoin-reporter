@@ -18,7 +18,7 @@ public sealed class TelegramReportService(IOptions<TelegramOptions> options, ILo
     private const string CustomEmojiNeutralCircleId = "5451882707875276247";
     private const string CustomEmojiMoneyId = "5409048419211682843";
 
-    private static readonly CultureInfo Ru = CultureInfo.GetCultureInfo("ru-RU");
+    private static readonly CultureInfo En = CultureInfo.GetCultureInfo("en-US");
 
     private readonly TelegramOptions _options = options.Value;
 
@@ -86,20 +86,20 @@ public sealed class TelegramReportService(IOptions<TelegramOptions> options, ILo
 
     internal static string TgEmojiMoneyMarkup() => TgEmoji(CustomEmojiMoneyId, "💵");
 
-    internal static string FormatPnlWeeklyMagnitudeRu(decimal value)
+    internal static string FormatPnlWeeklyMagnitude(decimal value)
     {
         var v = Math.Abs(value);
 
         if (v == 0m)
-            return 0m.ToString("00.00", Ru.NumberFormat);
+            return 0m.ToString("00.00", En.NumberFormat);
 
-        return v.ToString("0.00", Ru.NumberFormat);
+        return v.ToString("0.00", En.NumberFormat);
     }
 
     private static string BuildPositionText(ClosedPosition p)
     {
         var baseSymbol = StripContractSuffix((p.Symbol ?? string.Empty).Trim());
-        var pnlText = FormatPnlRu(p.Pnl);
+        var pnlText = FormatPnl(p.Pnl);
 
         var closeLocal = p.CloseTime.ToOffset(ReportTimeZoneOffset);
 
@@ -122,7 +122,7 @@ public sealed class TelegramReportService(IOptions<TelegramOptions> options, ILo
         sb.Append(WebUtility.HtmlEncode(sideLine));
         sb.Append('\n');
         sb.Append("Close: ");
-        sb.Append(WebUtility.HtmlEncode(closeLocal.ToString("dd.MM.yyyy HH:mm:ss", Ru.DateTimeFormat)));
+        sb.Append(WebUtility.HtmlEncode(closeLocal.ToString("MM/dd/yyyy HH:mm:ss", En.DateTimeFormat)));
 
         return sb.ToString();
     }
@@ -130,12 +130,12 @@ public sealed class TelegramReportService(IOptions<TelegramOptions> options, ILo
     private static string TgEmoji(string emojiId, string fallbackGlyph) =>
         $"<tg-emoji emoji-id=\"{emojiId}\">{fallbackGlyph}</tg-emoji>";
 
-    private static string FormatPnlRu(decimal? pnl)
+    private static string FormatPnl(decimal? pnl)
     {
         if (pnl is null)
             return "n/a";
 
-        return pnl.Value.ToString("+0.00;-0.00;0", Ru.NumberFormat);
+        return pnl.Value.ToString("+0.00;-0.00;0", En.NumberFormat);
     }
 
     private static string FormatLeverage(decimal? leverage)
