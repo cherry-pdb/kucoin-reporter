@@ -34,10 +34,7 @@ pnpm-debug.log*
 !.env.example
 
 # --- Docker / local volumes (if any) ---
-/data/
+# Do not use /data/ — on Windows Git it also ignores the EF project folder "Data/".
 /pgdata/
 /postgres-data/
-
-# Ensure backend data access layer isn't ignored.
-!backend/Energy.Api/Data/
 
