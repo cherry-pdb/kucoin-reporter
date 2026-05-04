@@ -26,5 +26,6 @@ builder.Services.AddHttpClient<KuCoinFuturesClient>((serviceProvider, client) =>
 
 builder.Services.AddSingleton<TelegramReportService>();
 builder.Services.AddHostedService<KuCoinSyncWorker>();
+builder.Services.AddHostedService<WeeklyReportWorker>();
 
 await builder.Build().RunAsync();
