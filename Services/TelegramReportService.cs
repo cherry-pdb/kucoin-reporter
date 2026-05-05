@@ -18,8 +18,6 @@ public sealed class TelegramReportService(IOptions<TelegramOptions> options, ILo
     private const string CustomEmojiNeutralCircleId = "5451882707875276247";
     private const string CustomEmojiMoneyId = "5409048419211682843";
 
-    private static readonly CultureInfo En = CultureInfo.GetCultureInfo("en-US");
-
     private readonly TelegramOptions _options = options.Value;
 
     public async Task SendPositionReportAsync(ClosedPosition position, CancellationToken cancellationToken)
@@ -90,10 +88,7 @@ public sealed class TelegramReportService(IOptions<TelegramOptions> options, ILo
     {
         var v = Math.Abs(value);
 
-        if (v == 0m)
-            return 0m.ToString("00.00", En.NumberFormat);
-
-        return v.ToString("0.00", En.NumberFormat);
+        return v == 0m ? 0m.ToString("00.00") : v.ToString("0.00");
     }
 
     private static string BuildPositionText(ClosedPosition p)
@@ -122,7 +117,7 @@ public sealed class TelegramReportService(IOptions<TelegramOptions> options, ILo
         sb.Append(WebUtility.HtmlEncode(sideLine));
         sb.Append('\n');
         sb.Append("Close: ");
-        sb.Append(WebUtility.HtmlEncode(closeLocal.ToString("MM/dd/yyyy HH:mm:ss", En.DateTimeFormat)));
+        sb.Append(WebUtility.HtmlEncode(closeLocal.ToString("dd.MM.yyyy HH:mm:ss")));
 
         return sb.ToString();
     }
@@ -132,10 +127,7 @@ public sealed class TelegramReportService(IOptions<TelegramOptions> options, ILo
 
     private static string FormatPnl(decimal? pnl)
     {
-        if (pnl is null)
-            return "n/a";
-
-        return pnl.Value.ToString("+0.00;-0.00;0", En.NumberFormat);
+        return pnl is null ? "n/a" : pnl.Value.ToString("+0.00;-0.00;0");
     }
 
     private static string FormatLeverage(decimal? leverage)
