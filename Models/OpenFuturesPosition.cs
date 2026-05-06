@@ -6,6 +6,7 @@ public sealed record OpenFuturesPosition(
     decimal? Leverage,
     decimal? UnrealisedPnl,
     decimal? RealisedPnl,
+    decimal? UnrealisedPnlPcnt,
     decimal? UnrealisedRoePcnt,
     decimal? PosMargin,
     decimal? AvgEntryPrice,

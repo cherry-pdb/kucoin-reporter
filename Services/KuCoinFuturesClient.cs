@@ -131,6 +131,7 @@ public sealed class KuCoinFuturesClient(
                 Leverage: ReadDecimalFlexible(item, "leverage") ?? ReadDecimalFlexible(item, "realLeverage"),
                 UnrealisedPnl: ReadDecimalFlexible(item, "unrealisedPnl"),
                 RealisedPnl: ReadDecimalFlexible(item, "realisedPnl"),
+                UnrealisedPnlPcnt: ReadDecimalFlexible(item, "unrealisedPnlPcnt"),
                 UnrealisedRoePcnt: ReadDecimalFlexible(item, "unrealisedRoePcnt"),
                 PosMargin: ReadDecimalFlexible(item, "posMargin"),
                 AvgEntryPrice: ReadDecimalFlexible(item, "avgEntryPrice"),

@@ -312,20 +312,22 @@ public sealed class TelegramBalanceCommandsWorker(
             sb.Append(WebUtility.HtmlEncode(lev));
             sb.AppendLine("x");
 
-            AppendSignedMoneyLine(sb, "Unrealised PNL", p.UnrealisedPnl, money);
-            AppendSignedMoneyLine(sb, "Realised PNL", p.RealisedPnl, money);
+            AppendSignedMoneyLine(sb, "Unrealised PNL", p.UnrealisedPnl, money, treatNullAsEmpty: false);
+            AppendSignedMoneyLine(sb, "Realised PNL", p.RealisedPnl, money, treatNullAsEmpty: false);
 
             var overall = (p.UnrealisedPnl ?? 0m) + (p.RealisedPnl ?? 0m);
             AppendSignedMoneyLine(sb, "Overall PNL", overall, money, treatNullAsEmpty: false);
 
-            if (p.UnrealisedRoePcnt is not null)
+            var roiPct = ComputeLeveragedRoiPercent(p);
+
+            if (roiPct is not null)
             {
                 sb.Append("ROI: ");
-                sb.Append(WebUtility.HtmlEncode(FormatSignedPercent(p.UnrealisedRoePcnt.Value)));
-                sb.AppendLine();
+                sb.Append(WebUtility.HtmlEncode(roiPct.Value.ToString("+0.00;-0.00;0.00", CultureInfo.InvariantCulture)));
+                sb.AppendLine("%");
             }
 
-            AppendMoneyLine(sb, "Margin", p.PosMargin, money);
+            AppendMoneyLine(sb, "Margin", p.PosMargin, money, showNaWhenNull: true);
 
             if (p.AvgEntryPrice is not null)
             {
@@ -467,10 +469,19 @@ public sealed class TelegramBalanceCommandsWorker(
         sb.AppendLine();
     }
 
-    private static void AppendMoneyLine(StringBuilder sb, string label, decimal? value, string moneyMarkup)
+    private static void AppendMoneyLine(StringBuilder sb, string label, decimal? value, string moneyMarkup, bool showNaWhenNull = false)
     {
         if (value is null)
+        {
+            if (!showNaWhenNull)
+                return;
+
+            sb.Append(WebUtility.HtmlEncode(label));
+            sb.Append(": ");
+            sb.AppendLine("n/a");
+            
             return;
+        }
 
         sb.Append(WebUtility.HtmlEncode(label));
         sb.Append(": ");
@@ -501,6 +512,20 @@ public sealed class TelegramBalanceCommandsWorker(
 
     private static string FormatSignedPercent(decimal v) =>
         (v / 100m).ToString("+0.00%;-0.00%;0%", CultureInfo.InvariantCulture);
+
+    private static decimal? ComputeLeveragedRoiPercent(OpenFuturesPosition p)
+    {
+        if (p.Leverage is null)
+            return null;
+
+        if (p.UnrealisedPnlPcnt is not null)
+            return p.UnrealisedPnlPcnt.Value * p.Leverage.Value * 100m;
+
+        if (p.UnrealisedRoePcnt is not null)
+            return p.UnrealisedRoePcnt.Value * p.Leverage.Value;
+
+        return null;
+    }
 
     private static bool TryGetSpotUsdPerUnit(IReadOnlyDictionary<string, decimal> prices, string currency, out decimal usdPerUnit)
     {
