@@ -45,7 +45,8 @@ public sealed class TelegramBalanceCommandsWorker(
                 new BotCommand { Command = "start", Description = "Show command list" },
                 new BotCommand { Command = "commands", Description = "Show command list" },
                 new BotCommand { Command = "futures", Description = "KuCoin Futures balance" },
-                new BotCommand { Command = "spot", Description = "Spot trade balance" }
+                new BotCommand { Command = "spot", Description = "Spot trade balance" },
+                new BotCommand { Command = "positions", Description = "Open Futures positions" }
             ],
             cancellationToken: stoppingToken);
         }
@@ -134,6 +135,29 @@ public sealed class TelegramBalanceCommandsWorker(
 
                         continue;
                     }
+
+                    if (MatchesCommand(text, "/positions"))
+                    {
+                        try
+                        {
+                            var positionsTask = futuresClient.GetOpenPositionsAsync(stoppingToken);
+                            var stopOrdersTask = futuresClient.GetOpenStopOrdersAsync(stoppingToken);
+                            await Task.WhenAll(positionsTask, stopOrdersTask);
+                            var html = BuildOpenPositionsHtml(positionsTask.Result, stopOrdersTask.Result);
+                            await bot.SendMessage(
+                                chatId,
+                                html,
+                                parseMode: ParseMode.Html,
+                                cancellationToken: stoppingToken);
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.LogWarning(ex, "Positions command failed");
+                            await bot.SendMessage(chatId, $"KuCoin Futures error: {ex.Message}", cancellationToken: stoppingToken);
+                        }
+
+                        continue;
+                    }
                 }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -152,7 +176,8 @@ public sealed class TelegramBalanceCommandsWorker(
         "Available commands:\n" +
         "/commands — show this list\n" +
         "/futures — KuCoin futures balance\n" +
-        "/spot — KuCoin spot trade account";
+        "/spot — KuCoin spot trade account\n" +
+        "/positions — open futures positions";
 
     private static HashSet<long> ParseAllowedUserIds(string raw)
     {
@@ -260,6 +285,222 @@ public sealed class TelegramBalanceCommandsWorker(
 
         return sb.ToString().TrimEnd();
     }
+
+    private static string BuildOpenPositionsHtml(
+        IReadOnlyList<OpenFuturesPosition> positions,
+        IReadOnlyList<OpenFuturesStopOrder> stopOrders)
+    {
+        if (positions.Count == 0)
+            return "<b>Positions (0)</b>\n\nNo open positions.";
+
+        var money = TelegramReportService.TgEmojiMoneyMarkup();
+        var sb = new StringBuilder();
+        sb.AppendLine($"<b>Positions ({positions.Count})</b>");
+        sb.AppendLine();
+
+        foreach (var p in positions)
+        {
+            var baseSymbol = StripContractSuffix(p.Symbol);
+            var side = string.IsNullOrWhiteSpace(p.PositionSide) ? "?" : p.PositionSide!.Trim().ToUpperInvariant();
+            var lev = p.Leverage is null ? "?" : FormatLeverage(p.Leverage.Value);
+
+            sb.Append('$');
+            sb.Append(WebUtility.HtmlEncode(baseSymbol));
+            sb.Append(' ');
+            sb.Append(WebUtility.HtmlEncode(side));
+            sb.Append(' ');
+            sb.Append(WebUtility.HtmlEncode(lev));
+            sb.AppendLine("x");
+
+            AppendSignedMoneyLine(sb, "Unrealised PNL", p.UnrealisedPnl, money);
+            AppendSignedMoneyLine(sb, "Realised PNL", p.RealisedPnl, money);
+
+            var overall = (p.UnrealisedPnl ?? 0m) + (p.RealisedPnl ?? 0m);
+            AppendSignedMoneyLine(sb, "Overall PNL", overall, money, treatNullAsEmpty: false);
+
+            if (p.UnrealisedRoePcnt is not null)
+            {
+                sb.Append("ROI: ");
+                sb.Append(WebUtility.HtmlEncode(FormatSignedPercent(p.UnrealisedRoePcnt.Value)));
+                sb.AppendLine();
+            }
+
+            AppendMoneyLine(sb, "Margin", p.PosMargin, money);
+
+            if (p.AvgEntryPrice is not null)
+            {
+                sb.Append("Entry price: ");
+                sb.Append(WebUtility.HtmlEncode(FormatPrice(p.AvgEntryPrice.Value)));
+                sb.AppendLine();
+            }
+
+            var (tp, sl) = TryInferTpSlPrices(stopOrders, p);
+
+            if (tp is not null)
+            {
+                sb.Append("TP: ");
+                sb.Append(WebUtility.HtmlEncode(FormatPrice(tp.Value)));
+                sb.AppendLine();
+                AppendCloseAtTarget(sb, "Close in TP", p, tp.Value, money);
+            }
+
+            if (sl is not null)
+            {
+                sb.Append("SL: ");
+                sb.Append(WebUtility.HtmlEncode(FormatPrice(sl.Value)));
+                sb.AppendLine();
+                AppendCloseAtTarget(sb, "Close in SL", p, sl.Value, money);
+            }
+
+            if (p.MarkPrice is not null)
+            {
+                sb.Append("Mark price: ");
+                sb.Append(WebUtility.HtmlEncode(FormatPrice(p.MarkPrice.Value)));
+                sb.AppendLine();
+            }
+
+            if (p.LiquidationPrice is not null)
+            {
+                sb.Append("Liquidation price: ");
+                sb.Append(WebUtility.HtmlEncode(FormatPrice(p.LiquidationPrice.Value)));
+                sb.AppendLine();
+            }
+
+            sb.AppendLine();
+        }
+
+        return sb.ToString().TrimEnd();
+    }
+
+    private static (decimal? Tp, decimal? Sl) TryInferTpSlPrices(IReadOnlyList<OpenFuturesStopOrder> allStops, OpenFuturesPosition p)
+    {
+        if (p.AvgEntryPrice is null)
+            return (null, null);
+
+        var entry = p.AvgEntryPrice.Value;
+        if (entry <= 0m)
+            return (null, null);
+
+        var side = (p.PositionSide ?? string.Empty).Trim().ToUpperInvariant();
+        var closeSide = side == "SHORT" ? "BUY" : "SELL"; // long closes with sell, short closes with buy (best effort)
+
+        decimal? tp = null;
+        decimal? sl = null;
+
+        foreach (var o in allStops)
+        {
+            if (!o.Symbol.Equals(p.Symbol, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (o.CloseOrder is false && o.ReduceOnly is false)
+                continue;
+
+            var orderSide = (o.Side ?? string.Empty).Trim().ToUpperInvariant();
+            if (!string.IsNullOrWhiteSpace(orderSide) && orderSide != closeSide)
+                continue;
+
+            var trigger = o.StopPrice ?? o.Price;
+            if (trigger is null || trigger.Value <= 0m)
+                continue;
+
+            if (side == "SHORT")
+            {
+                // For shorts: lower trigger = TP, higher trigger = SL
+                if (trigger.Value < entry && (tp is null || trigger.Value < tp.Value))
+                    tp = trigger.Value;
+                if (trigger.Value > entry && (sl is null || trigger.Value > sl.Value))
+                    sl = trigger.Value;
+            }
+            else
+            {
+                // Default to LONG-like behavior when unknown: higher trigger = TP, lower trigger = SL
+                if (trigger.Value > entry && (tp is null || trigger.Value > tp.Value))
+                    tp = trigger.Value;
+                if (trigger.Value < entry && (sl is null || trigger.Value < sl.Value))
+                    sl = trigger.Value;
+            }
+        }
+
+        return (tp, sl);
+    }
+
+    private static void AppendCloseAtTarget(StringBuilder sb, string label, OpenFuturesPosition p, decimal targetPrice, string moneyMarkup)
+    {
+        if (p.AvgEntryPrice is null || p.Leverage is null || p.PosMargin is null)
+            return;
+
+        var entry = p.AvgEntryPrice.Value;
+        
+        if (entry <= 0m)
+            return;
+
+        var side = (p.PositionSide ?? string.Empty).Trim().ToUpperInvariant();
+        var priceMove = side == "SHORT"
+            ? (entry - targetPrice) / entry
+            : (targetPrice - entry) / entry;
+
+        var roiPct = priceMove * p.Leverage.Value * 100m;
+        var pnlAtTarget = p.PosMargin.Value * (roiPct / 100m);
+
+        sb.Append(WebUtility.HtmlEncode(label));
+        sb.Append(": ");
+        sb.Append(WebUtility.HtmlEncode(roiPct.ToString("+0.00;-0.00;0.00", CultureInfo.InvariantCulture)));
+        sb.Append("% ");
+        sb.Append(TelegramReportService.TgEmojiDirectionForSign(pnlAtTarget));
+        sb.Append(WebUtility.HtmlEncode(FormatUsdNumber(pnlAtTarget)));
+        sb.Append(moneyMarkup);
+        sb.AppendLine();
+    }
+
+    private static void AppendSignedMoneyLine(StringBuilder sb, string label, decimal? value, string moneyMarkup, bool treatNullAsEmpty = true)
+    {
+        if (value is null && treatNullAsEmpty)
+            return;
+
+        sb.Append(WebUtility.HtmlEncode(label));
+        sb.Append(": ");
+
+        var v = value ?? 0m;
+        sb.Append(TelegramReportService.TgEmojiDirectionForSign(v));
+        sb.Append(WebUtility.HtmlEncode(FormatUsdNumber(v)));
+        sb.Append(moneyMarkup);
+        sb.AppendLine();
+    }
+
+    private static void AppendMoneyLine(StringBuilder sb, string label, decimal? value, string moneyMarkup)
+    {
+        if (value is null)
+            return;
+
+        sb.Append(WebUtility.HtmlEncode(label));
+        sb.Append(": ");
+        sb.Append(WebUtility.HtmlEncode(FormatUsdNumber(value.Value)));
+        sb.Append(moneyMarkup);
+        sb.AppendLine();
+    }
+
+    private static string StripContractSuffix(string symbol)
+    {
+        if (string.IsNullOrWhiteSpace(symbol))
+            return symbol;
+
+        var upper = symbol.ToUpperInvariant();
+
+        foreach (var suffix in new[] { "USDTM", "USDCM", "USDM", "USDT", "USDC", "USD" })
+            if (upper.EndsWith(suffix, StringComparison.Ordinal) && upper.Length > suffix.Length)
+                return symbol[..^suffix.Length].TrimEnd();
+
+        return symbol;
+    }
+
+    private static string FormatLeverage(decimal v) =>
+        v % 1m == 0 ? v.ToString("0", CultureInfo.InvariantCulture) : v.ToString("0.##", CultureInfo.InvariantCulture);
+
+    private static string FormatPrice(decimal v) =>
+        v.ToString("0.########", CultureInfo.InvariantCulture);
+
+    private static string FormatSignedPercent(decimal v) =>
+        (v / 100m).ToString("+0.00%;-0.00%;0%", CultureInfo.InvariantCulture);
 
     private static bool TryGetSpotUsdPerUnit(IReadOnlyDictionary<string, decimal> prices, string currency, out decimal usdPerUnit)
     {

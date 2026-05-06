@@ -89,8 +89,142 @@ public sealed class KuCoinFuturesClient(
             MaxWithdrawAmount: ReadDecimal(data, "maxWithdrawAmount"));
     }
 
+    public async Task<IReadOnlyList<OpenFuturesPosition>> GetOpenPositionsAsync(CancellationToken cancellationToken)
+    {
+        var currency = string.IsNullOrWhiteSpace(_kuCoinOptions.FuturesOverviewCurrency)
+            ? "USDT"
+            : _kuCoinOptions.FuturesOverviewCurrency.Trim();
+        var q = Uri.EscapeDataString(currency);
+
+        using var response = await httpClient.GetAsync($"/api/v1/positions?currency={q}", cancellationToken);
+        var json = await response.Content.ReadAsStringAsync(cancellationToken);
+
+        if (!response.IsSuccessStatusCode)
+            throw new HttpRequestException($"KuCoin futures request failed: HTTP {(int)response.StatusCode}. Body: {json}");
+
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+
+        if (root.TryGetProperty("code", out var codeEl) && codeEl.GetString() != "200000")
+            throw new InvalidOperationException($"KuCoin futures returned code {codeEl}. Body: {json}");
+
+        if (!root.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Array)
+            return [];
+
+        var list = new List<OpenFuturesPosition>();
+
+        foreach (var item in data.EnumerateArray())
+        {
+            var isOpen = ReadBool(item, "isOpen");
+
+            if (isOpen is not true)
+                continue;
+
+            var symbol = ReadString(item, "symbol")?.Trim();
+
+            if (string.IsNullOrWhiteSpace(symbol))
+                continue;
+
+            list.Add(new OpenFuturesPosition(
+                Symbol: symbol,
+                PositionSide: ReadString(item, "positionSide"),
+                Leverage: ReadDecimalFlexible(item, "leverage") ?? ReadDecimalFlexible(item, "realLeverage"),
+                UnrealisedPnl: ReadDecimalFlexible(item, "unrealisedPnl"),
+                RealisedPnl: ReadDecimalFlexible(item, "realisedPnl"),
+                UnrealisedRoePcnt: ReadDecimalFlexible(item, "unrealisedRoePcnt"),
+                PosMargin: ReadDecimalFlexible(item, "posMargin"),
+                AvgEntryPrice: ReadDecimalFlexible(item, "avgEntryPrice"),
+                MarkPrice: ReadDecimalFlexible(item, "markPrice"),
+                LiquidationPrice: ReadDecimalFlexible(item, "liquidationPrice")));
+        }
+
+        list.Sort((a, b) => string.Compare(a.Symbol, b.Symbol, StringComparison.OrdinalIgnoreCase));
+        
+        return list;
+    }
+
+    public async Task<IReadOnlyList<OpenFuturesStopOrder>> GetOpenStopOrdersAsync(CancellationToken cancellationToken)
+    {
+        var result = new List<OpenFuturesStopOrder>();
+        var page = 1;
+        const int pageSize = 200;
+
+        while (true)
+        {
+            using var response = await httpClient.GetAsync($"/api/v1/stopOrders?currentPage={page}&pageSize={pageSize}", cancellationToken);
+            var json = await response.Content.ReadAsStringAsync(cancellationToken);
+
+            if (!response.IsSuccessStatusCode)
+                throw new HttpRequestException($"KuCoin futures stopOrders request failed: HTTP {(int)response.StatusCode}. Body: {json}");
+
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            if (root.TryGetProperty("code", out var codeEl) && codeEl.GetString() != "200000")
+                throw new InvalidOperationException($"KuCoin futures returned code {codeEl}. Body: {json}");
+
+            if (!root.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object)
+                break;
+
+            if (!data.TryGetProperty("items", out var itemsEl) || itemsEl.ValueKind != JsonValueKind.Array)
+                break;
+
+            var added = 0;
+
+            foreach (var item in itemsEl.EnumerateArray())
+            {
+                var symbol = ReadString(item, "symbol")?.Trim();
+
+                if (string.IsNullOrWhiteSpace(symbol))
+                    continue;
+
+                var isActive = ReadBool(item, "isActive");
+                var status = ReadString(item, "status");
+
+                if (isActive is false)
+                    continue;
+
+                if (!string.IsNullOrWhiteSpace(status) && !status.Equals("open", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                result.Add(new OpenFuturesStopOrder(
+                    Symbol: symbol,
+                    Side: ReadString(item, "side"),
+                    StopPrice: ReadDecimalFlexible(item, "stopPrice"),
+                    Price: ReadDecimalFlexible(item, "price"),
+                    CloseOrder: ReadBool(item, "closeOrder"),
+                    ReduceOnly: ReadBool(item, "reduceOnly")));
+
+                added++;
+            }
+
+            var totalPage = ReadInt(data, "totalPage") ?? page;
+            
+            if (page >= totalPage || added == 0)
+                break;
+
+            page++;
+        }
+
+        return result;
+    }
+
     private static string? ReadString(JsonElement parent, string name) =>
         parent.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
+
+    private static bool? ReadBool(JsonElement parent, string name)
+    {
+        if (!parent.TryGetProperty(name, out var p))
+            return null;
+
+        return p.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.String => bool.TryParse(p.GetString(), out var b) ? b : null,
+            _ => null
+        };
+    }
 
     private static decimal? ReadDecimal(JsonElement parent, string name)
     {
@@ -103,6 +237,52 @@ public sealed class KuCoinFuturesClient(
                 ? d
                 : null,
             JsonValueKind.Number => p.TryGetDecimal(out var x) ? x : null,
+            _ => null
+        };
+    }
+
+    private static decimal? ReadDecimalFlexible(JsonElement parent, string name)
+    {
+        if (!parent.TryGetProperty(name, out var p))
+            return null;
+
+        if (p.ValueKind == JsonValueKind.Number)
+        {
+            if (p.TryGetDecimal(out var dec))
+                return dec;
+
+            if (p.TryGetDouble(out var dbl))
+                return (decimal)dbl;
+
+            return null;
+        }
+
+        if (p.ValueKind == JsonValueKind.String)
+        {
+            var s = p.GetString();
+            
+            if (string.IsNullOrWhiteSpace(s))
+                return null;
+
+            if (decimal.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out var d))
+                return d;
+
+            if (double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out var dbl))
+                return (decimal)dbl;
+        }
+
+        return null;
+    }
+
+    private static int? ReadInt(JsonElement parent, string name)
+    {
+        if (!parent.TryGetProperty(name, out var p))
+            return null;
+
+        return p.ValueKind switch
+        {
+            JsonValueKind.Number => p.TryGetInt32(out var i) ? i : null,
+            JsonValueKind.String => int.TryParse(p.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var i) ? i : null,
             _ => null
         };
     }
