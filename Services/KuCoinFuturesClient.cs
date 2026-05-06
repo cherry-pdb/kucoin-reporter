@@ -128,6 +128,7 @@ public sealed class KuCoinFuturesClient(
             list.Add(new OpenFuturesPosition(
                 Symbol: symbol,
                 PositionSide: ReadString(item, "positionSide"),
+                CurrentQty: ReadDecimalFlexible(item, "currentQty"),
                 Leverage: ReadDecimalFlexible(item, "leverage") ?? ReadDecimalFlexible(item, "realLeverage"),
                 UnrealisedPnl: ReadDecimalFlexible(item, "unrealisedPnl"),
                 RealisedPnl: ReadDecimalFlexible(item, "realisedPnl"),
@@ -200,7 +201,7 @@ public sealed class KuCoinFuturesClient(
             }
 
             var totalPage = ReadInt(data, "totalPage") ?? page;
-            
+
             if (page >= totalPage || added == 0)
                 break;
 

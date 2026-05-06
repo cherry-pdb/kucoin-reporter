@@ -301,7 +301,7 @@ public sealed class TelegramBalanceCommandsWorker(
         foreach (var p in positions)
         {
             var baseSymbol = StripContractSuffix(p.Symbol);
-            var side = string.IsNullOrWhiteSpace(p.PositionSide) ? "?" : p.PositionSide!.Trim().ToUpperInvariant();
+            var side = GetEffectiveSide(p);
             var lev = p.Leverage is null ? "?" : FormatLeverage(p.Leverage.Value);
 
             sb.Append('$');
@@ -383,7 +383,7 @@ public sealed class TelegramBalanceCommandsWorker(
         if (entry <= 0m)
             return (null, null);
 
-        var side = (p.PositionSide ?? string.Empty).Trim().ToUpperInvariant();
+        var side = GetEffectiveSide(p);
         var closeSide = side == "SHORT" ? "BUY" : "SELL"; // long closes with sell, short closes with buy (best effort)
 
         decimal? tp = null;
@@ -436,7 +436,7 @@ public sealed class TelegramBalanceCommandsWorker(
         if (entry <= 0m)
             return;
 
-        var side = (p.PositionSide ?? string.Empty).Trim().ToUpperInvariant();
+        var side = GetEffectiveSide(p);
         var priceMove = side == "SHORT"
             ? (entry - targetPrice) / entry
             : (targetPrice - entry) / entry;
@@ -510,9 +510,6 @@ public sealed class TelegramBalanceCommandsWorker(
     private static string FormatPrice(decimal v) =>
         v.ToString("0.########", CultureInfo.InvariantCulture);
 
-    private static string FormatSignedPercent(decimal v) =>
-        (v / 100m).ToString("+0.00%;-0.00%;0%", CultureInfo.InvariantCulture);
-
     private static decimal? ComputeLeveragedRoiPercent(OpenFuturesPosition p)
     {
         if (p.Leverage is null)
@@ -525,6 +522,31 @@ public sealed class TelegramBalanceCommandsWorker(
             return p.UnrealisedRoePcnt.Value * p.Leverage.Value;
 
         return null;
+    }
+
+    private static string GetEffectiveSide(OpenFuturesPosition p)
+    {
+        var raw = (p.PositionSide ?? string.Empty).Trim().ToUpperInvariant();
+        
+        switch (raw)
+        {
+            case "LONG" or "SHORT":
+                return raw;
+            case "BOTH" when p.CurrentQty is not null:
+            {
+                switch (p.CurrentQty.Value)
+                {
+                    case > 0m:
+                        return "LONG";
+                    case < 0m:
+                        return "SHORT";
+                }
+
+                break;
+            }
+        }
+
+        return string.IsNullOrWhiteSpace(raw) ? "?" : raw;
     }
 
     private static bool TryGetSpotUsdPerUnit(IReadOnlyDictionary<string, decimal> prices, string currency, out decimal usdPerUnit)

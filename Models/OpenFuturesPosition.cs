@@ -3,6 +3,7 @@ namespace KuCoinFuturesReporter.Models;
 public sealed record OpenFuturesPosition(
     string Symbol,
     string? PositionSide,
+    decimal? CurrentQty,
     decimal? Leverage,
     decimal? UnrealisedPnl,
     decimal? RealisedPnl,
