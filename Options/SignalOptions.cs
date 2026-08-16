@@ -7,7 +7,7 @@ public sealed class SignalOptions
     public bool Enabled { get; set; } = true;
     public int ScanIntervalMinutes { get; set; } = 60;
     public int ScanAfterHourCloseMinutes { get; set; } = 3;
-    public int MaxSymbols { get; set; } = 40;
+    public int MaxSymbols { get; set; } = 100;
     public decimal MinTurnover24hUsd { get; set; } = 12_000_000m;
     public int MinListingAgeDays { get; set; } = 21;
     public decimal RiskPercent { get; set; } = 2m;

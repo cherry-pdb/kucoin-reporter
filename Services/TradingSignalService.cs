@@ -186,9 +186,13 @@ public sealed class TradingSignalService(
             sb.Append(WebUtility.HtmlEncode(s.Leverage.ToString(System.Globalization.CultureInfo.InvariantCulture)));
             sb.AppendLine("x isolated");
 
-            sb.Append("Quality: ");
+            sb.Append("Trust: <b>");
+            sb.Append(WebUtility.HtmlEncode(s.TrustLevel));
+            sb.Append("</b> ");
+            sb.Append(WebUtility.HtmlEncode(s.TrustMarker));
+            sb.Append(" (");
             sb.Append(WebUtility.HtmlEncode(s.QualityScore.ToString("0", System.Globalization.CultureInfo.InvariantCulture)));
-            sb.AppendLine("/100");
+            sb.AppendLine("/100)");
             sb.Append("Entry: ");
             sb.AppendLine(WebUtility.HtmlEncode(FormatPrice(s.Entry)));
             sb.Append("SL: ");

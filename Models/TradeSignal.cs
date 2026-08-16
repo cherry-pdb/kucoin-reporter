@@ -14,4 +14,26 @@ public sealed record TradeSignal(
     decimal Strength,
     decimal QualityScore,
     string Reason,
-    bool HasOpenPosition);
+    bool HasOpenPosition)
+{
+    public string TrustLevel
+    {
+        get
+        {
+            if (QualityScore >= 80m)
+                return "HIGH";
+
+            if (QualityScore >= 70m)
+                return "MED";
+                
+            return "LOW";
+        }
+    }
+
+    public string TrustMarker => TrustLevel switch
+    {
+        "HIGH" => "●●●",
+        "MED" => "●●○",
+        _ => "●○○"
+    };
+}
