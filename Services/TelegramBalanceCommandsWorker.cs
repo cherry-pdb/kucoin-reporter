@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Net;
 using System.Text;
@@ -12,18 +13,30 @@ namespace KuCoinFuturesReporter.Services;
 
 public sealed class TelegramBalanceCommandsWorker(
     IOptionsMonitor<TelegramOptions> telegramOptions,
+    TelegramAccessService access,
     KuCoinFuturesClient futuresClient,
     KuCoinSpotClient spotClient,
     ILogger<TelegramBalanceCommandsWorker> logger) : BackgroundService
 {
+    private static readonly BotCommand[] PrivateCommands =
+    [
+        new() { Command = "start", Description = "Show command list" },
+        new() { Command = "commands", Description = "Show command list" },
+        new() { Command = "futures", Description = "KuCoin Futures balance" },
+        new() { Command = "spot", Description = "Spot trade balance" },
+        new() { Command = "positions", Description = "Open Futures positions" }
+    ];
+
+    private readonly ConcurrentDictionary<long, byte> _deniedLogged = new();
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var opts = telegramOptions.CurrentValue;
-        var allowed = ParseAllowedUserIds(opts.BalanceCommandAllowedUserIds);
+        var allowed = access.GetAllowedUserIds();
         
         if (string.IsNullOrWhiteSpace(opts.BotToken) || allowed.Count == 0)
         {
-            logger.LogWarning("Telegram balance commands disabled: set Telegram:BotToken and Telegram:BalanceCommandAllowedUserIds (comma-separated Telegram user ids).");
+            logger.LogWarning("Telegram commands disabled: set Telegram:BotToken and Telegram:AllowedUserIds (comma-separated Telegram user ids).");
             return;
         }
 
@@ -38,22 +51,7 @@ public sealed class TelegramBalanceCommandsWorker(
             logger.LogWarning(ex, "DeleteWebhook failed (safe to ignore if webhook was not set).");
         }
 
-        try
-        {
-            await bot.SetMyCommands(
-            [
-                new BotCommand { Command = "start", Description = "Show command list" },
-                new BotCommand { Command = "commands", Description = "Show command list" },
-                new BotCommand { Command = "futures", Description = "KuCoin Futures balance" },
-                new BotCommand { Command = "spot", Description = "Spot trade balance" },
-                new BotCommand { Command = "positions", Description = "Open Futures positions" }
-            ],
-            cancellationToken: stoppingToken);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "SetMyCommands failed; the command menu in Telegram may be empty.");
-        }
+        await PublishPrivateCommandMenuAsync(bot, allowed, stoppingToken);
 
         var offset = 0;
 
@@ -65,21 +63,42 @@ public sealed class TelegramBalanceCommandsWorker(
                     offset: offset,
                     limit: 100,
                     timeout: 30,
-                    allowedUpdates: [UpdateType.Message],
+                    allowedUpdates: [UpdateType.Message, UpdateType.CallbackQuery],
                     cancellationToken: stoppingToken);
 
                 foreach (var update in updates)
                 {
                     offset = update.Id + 1;
-                    
+
+                    if (update.CallbackQuery is { } callback)
+                    {
+                        if (!access.IsAllowed(callback.From))
+                        {
+                            LogDenied(callback.From, "callback");
+                            try
+                            {
+                                await bot.AnswerCallbackQuery(callback.Id, cancellationToken: stoppingToken);
+                            }
+                            catch (Exception ex)
+                            {
+                                logger.LogDebug(ex, "AnswerCallbackQuery for unauthorized user failed.");
+                            }
+                        }
+
+                        continue;
+                    }
+
                     if (update.Message is not { } msg || msg.Text is null)
                         continue;
 
                     if (msg.Chat.Type != ChatType.Private)
                         continue;
 
-                    if (msg.From?.Id is null || !allowed.Contains(msg.From.Id))
+                    if (!access.IsAllowed(msg.From))
+                    {
+                        LogDenied(msg.From, "message");
                         continue;
+                    }
 
                     var text = msg.Text;
                     var chatId = msg.Chat.Id;
@@ -179,15 +198,40 @@ public sealed class TelegramBalanceCommandsWorker(
         "/spot — KuCoin spot trade account\n" +
         "/positions — open futures positions";
 
-    private static HashSet<long> ParseAllowedUserIds(string raw)
+    private async Task PublishPrivateCommandMenuAsync(
+        ITelegramBotClient bot,
+        IReadOnlySet<long> allowed,
+        CancellationToken cancellationToken)
     {
-        var set = new HashSet<long>();
+        try
+        {
+            await bot.DeleteMyCommands(new BotCommandScopeDefault(), cancellationToken: cancellationToken);
+            await bot.DeleteMyCommands(new BotCommandScopeAllPrivateChats(), cancellationToken: cancellationToken);
 
-        foreach (var part in raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-            if (long.TryParse(part, NumberStyles.Integer, CultureInfo.InvariantCulture, out var id))
-                set.Add(id);
+            foreach (var userId in allowed)
+            {
+                await bot.SetMyCommands(
+                    PrivateCommands,
+                    new BotCommandScopeChat { ChatId = userId },
+                    cancellationToken: cancellationToken);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "SetMyCommands failed; the command menu in Telegram may be empty or visible to everyone.");
+        }
+    }
 
-        return set;
+    private void LogDenied(User? user, string kind)
+    {
+        if (user is not null && !_deniedLogged.TryAdd(user.Id, 0))
+            return;
+
+        logger.LogWarning(
+            "Denied Telegram {Kind} from unauthorized user {UserId} (@{Username})",
+            kind,
+            user?.Id,
+            string.IsNullOrWhiteSpace(user?.Username) ? "-" : user.Username);
     }
 
     private static bool MatchesCommand(string text, string command)

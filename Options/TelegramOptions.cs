@@ -8,5 +8,6 @@ public sealed class TelegramOptions
     public string ChatId { get; set; } = string.Empty;
     public string ForwardRelayPrivateUserId { get; set; } = string.Empty;
     public bool DisableNotification { get; set; } = true;
+    public string AllowedUserIds { get; set; } = string.Empty;
     public string BalanceCommandAllowedUserIds { get; set; } = string.Empty;
 }

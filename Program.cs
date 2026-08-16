@@ -7,6 +7,7 @@ var builder = Host.CreateApplicationBuilder(args);
 
 builder.Services.Configure<KuCoinOptions>(builder.Configuration.GetSection(KuCoinOptions.SectionName));
 builder.Services.Configure<TelegramOptions>(builder.Configuration.GetSection(TelegramOptions.SectionName));
+builder.Services.Configure<SignalOptions>(builder.Configuration.GetSection(SignalOptions.SectionName));
 
 builder.Services.AddDbContext<AppDbContext>(options =>
 {
@@ -32,10 +33,13 @@ builder.Services.AddHttpClient<KuCoinSpotClient>((serviceProvider, client) =>
 }).AddHttpMessageHandler<KuCoinAuthHandler>();
 
 builder.Services.AddSingleton<TelegramReportService>();
+builder.Services.AddSingleton<TelegramAccessService>();
+builder.Services.AddSingleton<TradingSignalService>();
 builder.Services.AddHostedService<KuCoinSyncWorker>();
 builder.Services.AddHostedService<WeeklyReportWorker>();
 builder.Services.AddHostedService<MonthlyReportWorker>();
 builder.Services.AddHostedService<QuarterlyReportWorker>();
 builder.Services.AddHostedService<TelegramBalanceCommandsWorker>();
+builder.Services.AddHostedService<TradingSignalWorker>();
 
 await builder.Build().RunAsync();

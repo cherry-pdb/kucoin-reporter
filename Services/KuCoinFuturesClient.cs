@@ -44,8 +44,8 @@ public sealed class KuCoinFuturesClient(
 
             var items = payload.Data?.Items ?? [];
             result.AddRange(items.Select(Map));
-
             var totalPage = payload.Data?.TotalPage ?? pageId;
+            
             if (pageId >= totalPage || items.Count == 0)
                 break;
 
@@ -211,6 +211,252 @@ public sealed class KuCoinFuturesClient(
         return result;
     }
 
+    public async Task<IReadOnlyList<FuturesContractSnapshot>> GetActiveContractsAsync(CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.GetAsync("/api/v1/contracts/active", cancellationToken);
+        var json = await response.Content.ReadAsStringAsync(cancellationToken);
+
+        if (!response.IsSuccessStatusCode)
+            throw new HttpRequestException($"KuCoin contracts/active failed: HTTP {(int)response.StatusCode}. Body: {json}");
+
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+
+        if (root.TryGetProperty("code", out var codeEl) && codeEl.GetString() != "200000")
+            throw new InvalidOperationException($"KuCoin contracts/active returned code {codeEl}. Body: {json}");
+
+        if (!root.TryGetProperty("data", out var data))
+            return [];
+
+        var list = new List<FuturesContractSnapshot>();
+
+        if (data.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in data.EnumerateArray())
+                if (TryMapContract(item, out var c))
+                    list.Add(c);
+        }
+        else if (data.ValueKind == JsonValueKind.Object)
+        {
+            if (data.TryGetProperty("items", out var items) && items.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in items.EnumerateArray())
+                    if (TryMapContract(item, out var c))
+                        list.Add(c);
+            }
+            else if (TryMapContract(data, out var single))
+            {
+                list.Add(single);
+            }
+        }
+
+        return list;
+    }
+
+    public async Task<IReadOnlyList<FuturesKline>> GetKlinesAsync(
+        string symbol,
+        int granularityMinutes,
+        int count,
+        CancellationToken cancellationToken)
+    {
+        if (count < 10)
+            count = 10;
+
+        var to = DateTimeOffset.UtcNow;
+        var from = to.AddMinutes(-granularityMinutes * (count + 8));
+        var url =
+            $"/api/v1/kline/query?symbol={Uri.EscapeDataString(symbol)}" +
+            $"&granularity={granularityMinutes}" +
+            $"&from={from.ToUnixTimeMilliseconds()}" +
+            $"&to={to.ToUnixTimeMilliseconds()}";
+
+        using var response = await httpClient.GetAsync(url, cancellationToken);
+        var json = await response.Content.ReadAsStringAsync(cancellationToken);
+
+        if (!response.IsSuccessStatusCode)
+            throw new HttpRequestException($"KuCoin kline failed for {symbol}: HTTP {(int)response.StatusCode}. Body: {json}");
+
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+
+        if (root.TryGetProperty("code", out var codeEl) && codeEl.GetString() != "200000")
+            throw new InvalidOperationException($"KuCoin kline returned code {codeEl} for {symbol}. Body: {json}");
+
+        if (!root.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Array)
+            return [];
+
+        var list = new List<FuturesKline>();
+
+        foreach (var row in data.EnumerateArray())
+        {
+            if (row.ValueKind != JsonValueKind.Array || row.GetArrayLength() < 5)
+                continue;
+
+            var openMs = ReadArrayInt64(row, 0);
+
+            if (openMs is null or <= 0)
+                continue;
+
+            var a = ReadArrayDecimal(row, 1);
+            var b = ReadArrayDecimal(row, 2);
+            var c = ReadArrayDecimal(row, 3);
+            var d = ReadArrayDecimal(row, 4);
+            var vol = row.GetArrayLength() > 5 ? ReadArrayDecimal(row, 5) : 0m;
+
+            if (a is null || b is null || c is null || d is null)
+                continue;
+
+            decimal open = a.Value, high, low, close;
+
+            var ochlHigh = c.Value;
+            var ochlLow = d.Value;
+            var ochlClose = b.Value;
+            var ochlValid = ochlHigh >= Math.Max(open, ochlClose) && ochlLow <= Math.Min(open, ochlClose);
+
+            var ohlcHigh = b.Value;
+            var ohlcLow = c.Value;
+            var ohlcClose = d.Value;
+            var ohlcValid = ohlcHigh >= Math.Max(open, ohlcClose) && ohlcLow <= Math.Min(open, ohlcClose);
+
+            if (ohlcValid || !ochlValid)
+            {
+                high = ohlcHigh;
+                low = ohlcLow;
+                close = ohlcClose;
+            }
+            else
+            {
+                high = ochlHigh;
+                low = ochlLow;
+                close = ochlClose;
+            }
+
+            if (high < low)
+                (high, low) = (low, high);
+
+            list.Add(new FuturesKline(
+                OpenTime: DateTimeOffset.FromUnixTimeMilliseconds(openMs.Value),
+                Open: open,
+                High: high,
+                Low: low,
+                Close: close,
+                Volume: vol ?? 0m));
+        }
+
+        list.Sort((x, y) => x.OpenTime.CompareTo(y.OpenTime));
+
+        var tf = TimeSpan.FromMinutes(granularityMinutes);
+
+        if (list.Count > 0 && list[^1].OpenTime + tf > DateTimeOffset.UtcNow)
+            list.RemoveAt(list.Count - 1);
+
+        if (list.Count > count)
+            list = list.Skip(list.Count - count).ToList();
+
+        return list;
+    }
+
+    private bool TryMapContract(JsonElement item, out FuturesContractSnapshot contract)
+    {
+        contract = null!;
+        var symbol = ReadString(item, "symbol")?.Trim();
+
+        if (string.IsNullOrWhiteSpace(symbol))
+            return false;
+
+        contract = new FuturesContractSnapshot(
+            Symbol: symbol,
+            Status: ReadString(item, "status"),
+            Type: ReadString(item, "type"),
+            QuoteCurrency: ReadString(item, "quoteCurrency"),
+            SettleCurrency: ReadString(item, "settleCurrency"),
+            MarketStage: ReadString(item, "marketStage"),
+            IsInverse: ReadBool(item, "isInverse") is true,
+            Multiplier: ReadDecimalFlexible(item, "multiplier"),
+            TickSize: ReadDecimalFlexible(item, "tickSize"),
+            LotSize: ReadDecimalFlexible(item, "lotSize"),
+            MarkPrice: ReadDecimalFlexible(item, "markPrice"),
+            LastTradePrice: ReadDecimalFlexible(item, "lastTradePrice"),
+            TurnoverOf24h: ReadDecimalFlexible(item, "turnoverOf24h"),
+            FundingFeeRate: ReadDecimalFlexible(item, "fundingFeeRate"),
+            MaxLeverage: ReadDecimalFlexible(item, "maxLeverage"),
+            FirstOpenDate: ReadUnixTime(item, "firstOpenDate"));
+
+        return true;
+    }
+
+    private static DateTimeOffset? ReadUnixTime(JsonElement parent, string name)
+    {
+        var ms = ReadInt64(parent, name);
+
+        if (ms is null or <= 0)
+            return null;
+
+        return DateTimeOffset.FromUnixTimeMilliseconds(ms.Value);
+    }
+
+    private static long? ReadInt64(JsonElement parent, string name)
+    {
+        if (!parent.TryGetProperty(name, out var p))
+            return null;
+
+        return p.ValueKind switch
+        {
+            JsonValueKind.Number when p.TryGetInt64(out var i) => i,
+            JsonValueKind.Number when p.TryGetDouble(out var d) => (long)d,
+            JsonValueKind.String when long.TryParse(p.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var i) => i,
+            _ => null
+        };
+    }
+
+    private static long? ReadArrayInt64(JsonElement array, int index)
+    {
+        if (index >= array.GetArrayLength())
+            return null;
+
+        var p = array[index];
+
+        return p.ValueKind switch
+        {
+            JsonValueKind.Number when p.TryGetInt64(out var i) => i,
+            JsonValueKind.Number when p.TryGetDouble(out var d) => (long)d,
+            JsonValueKind.String when long.TryParse(p.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var i) => i,
+            _ => null
+        };
+    }
+
+    private static decimal? ReadArrayDecimal(JsonElement array, int index)
+    {
+        if (index >= array.GetArrayLength())
+            return null;
+
+        var p = array[index];
+
+        if (p.ValueKind == JsonValueKind.Number)
+        {
+            if (p.TryGetDecimal(out var dec))
+                return dec;
+
+            if (p.TryGetDouble(out var dbl))
+                return (decimal)dbl;
+
+            return null;
+        }
+
+        if (p.ValueKind == JsonValueKind.String)
+        {
+            var s = p.GetString();
+
+            if (string.IsNullOrWhiteSpace(s))
+                return null;
+
+            if (decimal.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out var d))
+                return d;
+        }
+
+        return null;
+    }
+
     private static string? ReadString(JsonElement parent, string name) =>
         parent.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
 
@@ -312,7 +558,9 @@ public sealed class KuCoinFuturesClient(
 
     private static decimal? ParseDecimal(string? value)
     {
-        if (string.IsNullOrWhiteSpace(value)) return null;
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+            
         return decimal.TryParse(value, NumberStyles.Any, CultureInfo.InvariantCulture, out var parsed) ? parsed : null;
     }
 
