@@ -32,8 +32,8 @@ builder.Services.AddHttpClient<KuCoinSpotClient>((serviceProvider, client) =>
     client.Timeout = TimeSpan.FromSeconds(30);
 }).AddHttpMessageHandler<KuCoinAuthHandler>();
 
-builder.Services.AddSingleton<TelegramReportService>();
 builder.Services.AddSingleton<TelegramAccessService>();
+builder.Services.AddSingleton<TelegramReportService>();
 builder.Services.AddSingleton<TradingSignalService>();
 builder.Services.AddHostedService<KuCoinSyncWorker>();
 builder.Services.AddHostedService<WeeklyReportWorker>();

@@ -9,7 +9,10 @@ using Telegram.Bot.Types.Enums;
 
 namespace KuCoinFuturesReporter.Services;
 
-public sealed class TelegramReportService(IOptions<TelegramOptions> options, ILogger<TelegramReportService> logger)
+public sealed class TelegramReportService(
+    IOptions<TelegramOptions> options,
+    TelegramAccessService access,
+    ILogger<TelegramReportService> logger)
 {
     internal static readonly TimeSpan ReportTimeZoneOffset = TimeSpan.FromHours(3);
 
@@ -69,6 +72,37 @@ public sealed class TelegramReportService(IOptions<TelegramOptions> options, ILo
             else
                 logger.LogInformation("Sent Telegram HTML ({Context})", logContextKey);
         }
+    }
+
+    public async Task SendPrivateHtmlAsync(string html, CancellationToken cancellationToken, string? logContextKey = null)
+    {
+        if (string.IsNullOrWhiteSpace(_options.BotToken))
+            throw new InvalidOperationException("Telegram settings are empty. Fill Telegram__BotToken.");
+
+        var recipients = access.GetAllowedUserIds();
+        
+        if (recipients.Count == 0)
+        {
+            logger.LogWarning("Skipped private Telegram message: set Telegram:AllowedUserIds.");
+            return;
+        }
+
+        var bot = new TelegramBotClient(_options.BotToken);
+
+        foreach (var userId in recipients)
+        {
+            await bot.SendMessage(
+                chatId: userId,
+                text: html,
+                parseMode: ParseMode.Html,
+                disableNotification: false,
+                cancellationToken: cancellationToken);
+        }
+
+        if (logContextKey is null)
+            logger.LogInformation("Sent private Telegram HTML to {Count} user(s)", recipients.Count);
+        else
+            logger.LogInformation("Sent private Telegram HTML ({Context}) to {Count} user(s)", logContextKey, recipients.Count);
     }
 
     internal static string TgEmojiDirectionForSign(decimal signedTotal)

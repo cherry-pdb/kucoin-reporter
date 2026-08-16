@@ -53,7 +53,7 @@ public sealed class TradingSignalWorker(
                 if (fresh.Count == 0)
                     continue;
 
-                await telegram.SendHtmlReportAsync(
+                await telegram.SendPrivateHtmlAsync(
                     TradingSignalService.BuildAlertHtml(fresh),
                     stoppingToken,
                     logContextKey: $"signals {string.Join(",", fresh.Select(s => s.Symbol))}");
