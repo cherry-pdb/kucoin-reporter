@@ -41,5 +41,6 @@ builder.Services.AddHostedService<MonthlyReportWorker>();
 builder.Services.AddHostedService<QuarterlyReportWorker>();
 builder.Services.AddHostedService<TelegramBalanceCommandsWorker>();
 builder.Services.AddHostedService<TradingSignalWorker>();
+builder.Services.AddHostedService<RoiLockAlertWorker>();
 
 await builder.Build().RunAsync();

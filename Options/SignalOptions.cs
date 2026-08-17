@@ -21,4 +21,9 @@ public sealed class SignalOptions
     public decimal MaxFundingAbs { get; set; } = 0.0008m;
     public decimal MinAtrPercent { get; set; } = 0.35m;
     public decimal MaxAtrPercent { get; set; } = 5.5m;
+    public bool RoiLockAlertEnabled { get; set; } = true;
+    public decimal RoiAlertPercent { get; set; } = 400m;
+    public decimal RoiLockFromPercent { get; set; } = 200m;
+    public decimal RoiLockToPercent { get; set; } = 300m;
+    public int RoiLockPollSeconds { get; set; } = 60;
 }
