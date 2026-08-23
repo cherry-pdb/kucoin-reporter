@@ -14,6 +14,7 @@ public sealed record TradeSignal(
     decimal Strength,
     decimal QualityScore,
     string Reason,
+    string Kind,
     bool HasOpenPosition)
 {
     public string TrustLevel

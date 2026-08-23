@@ -87,18 +87,19 @@ public sealed class TradingSignalService(
                 {
                     var h1 = await futuresClient.GetKlinesAsync(contract.Symbol, 60, 80, cancellationToken);
                     var h4 = await futuresClient.GetKlinesAsync(contract.Symbol, 240, 240, cancellationToken);
+                    var hasPosition = openSymbols.Contains(contract.Symbol);
+                    var equity = overviewTask.Result.AccountEquity;
+                    var breakout = TrendBreakoutSignalEngine.Evaluate(contract, h1, h4, equity, hasPosition, options);
+                    var pullback = TrendPullbackSignalEngine.Evaluate(contract, h1, h4, equity, hasPosition, options);
 
-                    var signal = TrendBreakoutSignalEngine.Evaluate(
-                        contract,
-                        h1,
-                        h4,
-                        overviewTask.Result.AccountEquity,
-                        openSymbols.Contains(contract.Symbol),
-                        options);
+                    lock (found)
+                    {
+                        if (breakout is not null)
+                            found.Add(breakout);
 
-                    if (signal is not null)
-                        lock (found)
-                            found.Add(signal);
+                        if (pullback is not null)
+                            found.Add(pullback);
+                    }
                 }
                 catch (OperationCanceledException)
                 {
@@ -117,6 +118,8 @@ public sealed class TradingSignalService(
             await Task.WhenAll(tasks);
 
             var ranked = found
+                .GroupBy(s => s.Symbol, StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.OrderByDescending(s => s.QualityScore).ThenByDescending(s => s.Strength).First())
                 .OrderByDescending(s => s.QualityScore)
                 .ThenByDescending(s => s.Strength)
                 .Take(Math.Max(1, options.MaxActiveSignals))
@@ -163,7 +166,7 @@ public sealed class TradingSignalService(
     {
         var sb = new StringBuilder();
         sb.AppendLine("<b>Setup</b>");
-        sb.AppendLine("Best ranked breakout(s) this hour. Not a guaranteed win. You open it on KuCoin; stop is mandatory.");
+        sb.AppendLine("Best ranked setup(s) this hour: Donchian breakout or 4h-trend pullback. Not a guaranteed win. You open it on KuCoin; stop is mandatory.");
         sb.AppendLine();
 
         var money = TelegramReportService.TgEmojiMoneyMarkup();
@@ -186,6 +189,8 @@ public sealed class TradingSignalService(
             sb.Append(WebUtility.HtmlEncode(s.Leverage.ToString(System.Globalization.CultureInfo.InvariantCulture)));
             sb.AppendLine("x isolated");
 
+            sb.Append("Type: ");
+            sb.AppendLine(WebUtility.HtmlEncode(FormatKind(s.Kind)));
             sb.Append("Trust: <b>");
             sb.Append(WebUtility.HtmlEncode(s.TrustLevel));
             sb.Append("</b> ");
@@ -272,6 +277,9 @@ public sealed class TradingSignalService(
 
         return symbol;
     }
+
+    private static string FormatKind(string kind) =>
+        kind.Equals("PULLBACK", StringComparison.OrdinalIgnoreCase) ? "Pullback" : "Breakout";
 
     private static string FormatPrice(decimal v)
     {
